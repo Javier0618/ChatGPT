@@ -7004,6 +7004,9 @@ async function renderModalContent(data, type) {
                             <i class="fas fa-layer-group"></i>
                             <span>Episodios y Temporadas</span>
                         </button>
+                        <button class="overlay-btn" id="btn-toggle-fullscreen" title="Pantalla completa">
+                            <i class="fas fa-expand"></i>
+                        </button>
                     </div>
                     <div class="player-drawer-overlay" id="player-drawer-overlay">
                         <div class="drawer-header">
@@ -7448,11 +7451,44 @@ function setupPlayerOverlayAndDrawer(modalContainer, seasonData) {
   const overlayCurrentEp = modalContainer.querySelector("#overlay-current-ep");
   const btnOpenDrawer = modalContainer.querySelector("#btn-open-drawer");
   const btnCloseDrawer = modalContainer.querySelector("#btn-close-drawer");
+  const btnFullscreen = modalContainer.querySelector("#btn-toggle-fullscreen");
+  const videoContainer = modalContainer.querySelector("#modal-video-container");
   const drawerOverlay = modalContainer.querySelector("#player-drawer-overlay");
   const drawerSeasonsRow = modalContainer.querySelector("#drawer-seasons-row");
   const drawerEpisodesGrid = modalContainer.querySelector("#drawer-episodes-grid");
 
   if (!drawerOverlay || !btnOpenDrawer) return null;
+
+  if (btnFullscreen && videoContainer) {
+    btnFullscreen.addEventListener("click", () => {
+      if (!document.fullscreenElement) {
+        if (videoContainer.requestFullscreen) {
+          videoContainer.requestFullscreen();
+        } else if (videoContainer.webkitRequestFullscreen) {
+          videoContainer.webkitRequestFullscreen();
+        } else if (videoContainer.msRequestFullscreen) {
+          videoContainer.msRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      }
+    });
+
+    document.addEventListener("fullscreenchange", () => {
+      const icon = btnFullscreen.querySelector("i");
+      if (icon) {
+        if (document.fullscreenElement === videoContainer) {
+          icon.className = "fas fa-compress";
+        } else {
+          icon.className = "fas fa-expand";
+        }
+      }
+    });
+  }
 
   const sortedSeasons = Object.values(seasonData)
     .filter(

@@ -5709,3 +5709,26 @@ footer p {
 .drawer-episode-card.active .drawer-episode-label {
   color: #ffd1b3;
 }
+
+/* Container Fullscreen mode overrides */
+.video-container-new:fullscreen,
+.video-container-new:-webkit-full-screen,
+.video-container-new:-moz-full-screen,
+.video-container-new:-ms-fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  aspect-ratio: auto !important;
+  background-color: #000;
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 999999 !important;
+}
+
+.video-container-new:fullscreen iframe,
+.video-container-new:-webkit-full-screen iframe,
+.video-container-new:-moz-full-screen iframe,
+.video-container-new:-ms-fullscreen iframe {
+  width: 100% !important;
+  height: 100% !important;
+}
