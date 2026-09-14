@@ -6580,7 +6580,12 @@ function playInIframe(url) {
   const iframe = document.getElementById("video-player-iframe");
   if (!videoContainer || !iframe) return;
 
-  iframe.src = url;
+  if (url) {
+    const formattedUrl = url.includes("autoplay=1")
+      ? url
+      : `${url}${url.includes("?") ? "&" : "?"}autoplay=1`;
+    iframe.src = formattedUrl;
+  }
 
   videoContainer.style.display = "block";
 }
@@ -6987,6 +6992,36 @@ async function renderModalContent(data, type) {
             <div class="desktop-player-section">
                 <div id="modal-video-container" class="video-container-new">
                     <iframe id="video-player-iframe" width="100%" src="" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                    ${
+                      type === "tv"
+                        ? `
+                    <div class="player-overlay-info" id="player-overlay-info" style="display: none;">
+                        <i class="fas fa-play-circle"></i>
+                        <span id="overlay-current-ep">T1: E1</span>
+                    </div>
+                    <div class="player-overlay-controls" id="player-overlay-controls" style="display: none;">
+                        <button class="overlay-btn" id="btn-open-drawer">
+                            <i class="fas fa-layer-group"></i>
+                            <span>Episodios y Temporadas</span>
+                        </button>
+                    </div>
+                    <div class="player-drawer-overlay" id="player-drawer-overlay">
+                        <div class="drawer-header">
+                            <div class="drawer-title">
+                                <i class="fas fa-list"></i> Episodios y Temporadas
+                            </div>
+                            <button class="drawer-close-btn" id="btn-close-drawer">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="drawer-body">
+                            <div class="drawer-seasons-row" id="drawer-seasons-row"></div>
+                            <div class="drawer-episodes-grid" id="drawer-episodes-grid"></div>
+                        </div>
+                    </div>
+                    `
+                        : ""
+                    }
                 </div>
                 ${type === "tv" ? episodesContainerHtml : ""}
             </div>
@@ -7165,9 +7200,12 @@ async function renderModalContent(data, type) {
     }
   }
 
+  let overlayController = null;
   if (type === "tv") {
     const seasonTabs = modalContainer.querySelectorAll(".season-tab");
     const seasonData = firestoreData.seasons || null;
+
+    overlayController = setupPlayerOverlayAndDrawer(modalContainer, seasonData);
 
     seasonTabs.forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -7182,13 +7220,13 @@ async function renderModalContent(data, type) {
             seasonData[seasonNum].episodes || {},
           );
 
-          attachEpisodeClickListeners(modalContainer);
+          attachEpisodeClickListeners(modalContainer, overlayController);
         }
       });
     });
 
-    attachEpisodeClickListeners(modalContainer);
-    attachDesktopEpisodeListeners(modalContainer, seasonData);
+    attachEpisodeClickListeners(modalContainer, overlayController);
+    attachDesktopEpisodeListeners(modalContainer, seasonData, overlayController);
   }
 
   try {
@@ -7334,8 +7372,15 @@ async function renderModalContent(data, type) {
                 </div>`;
     }
   } else if (type === "tv") {
-    let firstEpisodeUrl = null;
-    if (seasonData && Object.keys(seasonData).length > 0) {
+    let playUrl = null;
+    if (overlayController && overlayController.initialUrl) {
+      playUrl = overlayController.initialUrl;
+      overlayController.selectEpisode(
+        overlayController.initialSeasonNum,
+        overlayController.initialEpisodeNum,
+        playUrl
+      );
+    } else if (seasonData && Object.keys(seasonData).length > 0) {
       const sortedSeasons = Object.values(seasonData).sort(
         (a, b) => a.season_number - b.season_number,
       );
@@ -7354,14 +7399,15 @@ async function renderModalContent(data, type) {
           firstSeasonWithEpisodes.episodes,
         ).sort((a, b) => a.episode_number - b.episode_number);
         if (sortedEpisodes.length > 0 && sortedEpisodes[0].video_url) {
-          firstEpisodeUrl = sortedEpisodes[0].video_url;
+          playUrl = sortedEpisodes[0].video_url;
         }
+      }
+      if (playUrl) {
+        playInIframe(playUrl);
       }
     }
 
-    if (firstEpisodeUrl) {
-      playInIframe(firstEpisodeUrl);
-    } else {
+    if (!playUrl) {
       document.getElementById("modal-video-container").innerHTML = `
                 <div class="video-placeholder">
                     <i class="fas fa-play-circle"></i>
@@ -7394,7 +7440,220 @@ function renderEpisodesCarousel(episodes) {
     .join("");
 }
 
-function attachEpisodeClickListeners(container) {
+function setupPlayerOverlayAndDrawer(modalContainer, seasonData) {
+  if (!seasonData || Object.keys(seasonData).length === 0) return null;
+
+  const overlayInfo = modalContainer.querySelector("#player-overlay-info");
+  const overlayControls = modalContainer.querySelector("#player-overlay-controls");
+  const overlayCurrentEp = modalContainer.querySelector("#overlay-current-ep");
+  const btnOpenDrawer = modalContainer.querySelector("#btn-open-drawer");
+  const btnCloseDrawer = modalContainer.querySelector("#btn-close-drawer");
+  const drawerOverlay = modalContainer.querySelector("#player-drawer-overlay");
+  const drawerSeasonsRow = modalContainer.querySelector("#drawer-seasons-row");
+  const drawerEpisodesGrid = modalContainer.querySelector("#drawer-episodes-grid");
+
+  if (!drawerOverlay || !btnOpenDrawer) return null;
+
+  const sortedSeasons = Object.values(seasonData)
+    .filter(
+      (s) =>
+        s.season_number > 0 &&
+        s.episodes &&
+        Object.values(s.episodes).some((ep) => ep.video_url),
+    )
+    .sort((a, b) => a.season_number - b.season_number);
+
+  if (sortedSeasons.length === 0) return null;
+
+  if (overlayInfo) overlayInfo.style.display = "flex";
+  if (overlayControls) overlayControls.style.display = "flex";
+
+  const urlParams = new URLSearchParams(window.location.search);
+  let initialSeasonNum = parseInt(urlParams.get("season"), 10);
+  let initialEpisodeNum = parseInt(urlParams.get("episode"), 10);
+
+  let targetSeason = sortedSeasons.find(
+    (s) => s.season_number === initialSeasonNum,
+  );
+  if (!targetSeason) {
+    targetSeason = sortedSeasons[0];
+  }
+
+  const sortedEpisodes = Object.values(targetSeason.episodes || {})
+    .filter((ep) => ep.video_url)
+    .sort((a, b) => a.episode_number - b.episode_number);
+
+  let targetEpisode = sortedEpisodes.find(
+    (ep) => ep.episode_number === initialEpisodeNum,
+  );
+  if (!targetEpisode && sortedEpisodes.length > 0) {
+    targetEpisode = sortedEpisodes[0];
+  }
+
+  let selectedSeasonNum = targetSeason.season_number;
+  let selectedEpisodeNum = targetEpisode ? targetEpisode.episode_number : 1;
+  let activeDrawerSeasonNum = selectedSeasonNum;
+
+  function updateOverlayBadge(sNum, eNum) {
+    if (overlayCurrentEp) {
+      overlayCurrentEp.textContent = `T${sNum}: E${eNum}`;
+    }
+  }
+
+  function updateUrlParams(sNum, eNum) {
+    const searchParams = new URLSearchParams(window.location.search);
+    searchParams.set("season", sNum);
+    searchParams.set("episode", eNum);
+    const newUrl = `${window.location.pathname}?${searchParams.toString()}${window.location.hash}`;
+    window.history.replaceState(null, "", newUrl);
+  }
+
+  function selectEpisode(sNum, eNum, videoUrl) {
+    selectedSeasonNum = sNum;
+    selectedEpisodeNum = eNum;
+    activeDrawerSeasonNum = sNum;
+
+    updateOverlayBadge(sNum, eNum);
+    updateUrlParams(sNum, eNum);
+
+    if (videoUrl) {
+      playInIframe(videoUrl);
+    }
+
+    const carouselTabs = modalContainer.querySelectorAll(".season-tab");
+    carouselTabs.forEach((tab) => {
+      const tNum = parseInt(tab.dataset.season, 10);
+      if (tNum === sNum) {
+        tab.classList.add("active");
+        if (seasonData[tNum]) {
+          const episodesCarousel = modalContainer.querySelector(".episodes-carousel");
+          if (episodesCarousel) {
+            episodesCarousel.innerHTML = renderEpisodesCarousel(seasonData[tNum].episodes || {});
+            attachEpisodeClickListeners(modalContainer, overlayControllerInstance);
+          }
+        }
+      } else {
+        tab.classList.remove("active");
+      }
+    });
+
+    const episodeBtns = modalContainer.querySelectorAll(".episode-btn");
+    episodeBtns.forEach((btn) => {
+      if (parseInt(btn.dataset.episode, 10) === eNum) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
+    });
+
+    const desktopTabs = modalContainer.querySelectorAll(".season-tab-desktop");
+    desktopTabs.forEach((tab) => {
+      const tNum = parseInt(tab.dataset.season, 10);
+      if (tNum === sNum) {
+        tab.classList.add("active");
+        if (seasonData[tNum]) {
+          const episodesList = modalContainer.querySelector("#episodes-list-desktop");
+          const episodesCount = modalContainer.querySelector(".episodes-count");
+          const episodes = seasonData[tNum].episodes || {};
+          const count = Object.values(episodes).filter((ep) => ep.video_url).length;
+          if (episodesCount) episodesCount.textContent = `Episodios (${count})`;
+          if (episodesList) {
+            episodesList.innerHTML = renderEpisodesDesktop(episodes);
+            attachDesktopEpisodeItemListeners(modalContainer, overlayControllerInstance);
+          }
+        }
+      } else {
+        tab.classList.remove("active");
+      }
+    });
+
+    const desktopItems = modalContainer.querySelectorAll(".episode-item-desktop");
+    desktopItems.forEach((item) => {
+      if (parseInt(item.dataset.episode, 10) === eNum) {
+        item.classList.add("active");
+      } else {
+        item.classList.remove("active");
+      }
+    });
+
+    drawerOverlay.classList.remove("active");
+  }
+
+  function renderDrawer() {
+    drawerSeasonsRow.innerHTML = sortedSeasons
+      .map(
+        (season) => `
+        <button class="drawer-season-tab ${season.season_number === activeDrawerSeasonNum ? "active" : ""}" data-season="${season.season_number}">
+            T${season.season_number}
+        </button>
+      `,
+      )
+      .join("");
+
+    const currentSeasonObj = sortedSeasons.find(
+      (s) => s.season_number === activeDrawerSeasonNum,
+    );
+    const eps = currentSeasonObj
+      ? Object.values(currentSeasonObj.episodes || {})
+          .filter((ep) => ep.video_url)
+          .sort((a, b) => a.episode_number - b.episode_number)
+      : [];
+
+    if (eps.length === 0) {
+      drawerEpisodesGrid.innerHTML = `<p class="no-episodes">${getText("details.noEpisodes")}</p>`;
+    } else {
+      drawerEpisodesGrid.innerHTML = eps
+        .map(
+          (ep) => `
+          <div class="drawer-episode-card ${activeDrawerSeasonNum === selectedSeasonNum && ep.episode_number === selectedEpisodeNum ? "active" : ""}" data-season="${activeDrawerSeasonNum}" data-episode="${ep.episode_number}" data-url="${ep.video_url}">
+              <span class="drawer-episode-num">E${ep.episode_number}</span>
+              <span class="drawer-episode-label">Episodio ${ep.episode_number}</span>
+          </div>
+        `,
+        )
+        .join("");
+    }
+
+    drawerSeasonsRow.querySelectorAll(".drawer-season-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        activeDrawerSeasonNum = parseInt(tab.dataset.season, 10);
+        renderDrawer();
+      });
+    });
+
+    drawerEpisodesGrid.querySelectorAll(".drawer-episode-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const sNum = parseInt(card.dataset.season, 10);
+        const eNum = parseInt(card.dataset.episode, 10);
+        const url = card.dataset.url;
+        selectEpisode(sNum, eNum, url);
+      });
+    });
+  }
+
+  btnOpenDrawer.addEventListener("click", () => {
+    activeDrawerSeasonNum = selectedSeasonNum;
+    renderDrawer();
+    drawerOverlay.classList.add("active");
+  });
+
+  btnCloseDrawer.addEventListener("click", () => {
+    drawerOverlay.classList.remove("active");
+  });
+
+  updateOverlayBadge(selectedSeasonNum, selectedEpisodeNum);
+
+  const overlayControllerInstance = {
+    initialUrl: targetEpisode ? targetEpisode.video_url : null,
+    initialSeasonNum: selectedSeasonNum,
+    initialEpisodeNum: selectedEpisodeNum,
+    selectEpisode,
+  };
+
+  return overlayControllerInstance;
+}
+
+function attachEpisodeClickListeners(container, overlayController) {
   container.querySelectorAll(".episode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       container
@@ -7402,7 +7661,14 @@ function attachEpisodeClickListeners(container) {
         .forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       if (btn.dataset.url) {
-        playInIframe(btn.dataset.url);
+        const activeSeasonTab = container.querySelector(".season-tab.active");
+        const seasonNum = activeSeasonTab ? parseInt(activeSeasonTab.dataset.season, 10) : 1;
+        const episodeNum = parseInt(btn.dataset.episode, 10);
+        if (overlayController) {
+          overlayController.selectEpisode(seasonNum, episodeNum, btn.dataset.url);
+        } else {
+          playInIframe(btn.dataset.url);
+        }
       }
     });
   });
@@ -7436,7 +7702,7 @@ function renderEpisodesDesktop(episodes) {
     .join("");
 }
 
-function attachDesktopEpisodeListeners(container, seasonData) {
+function attachDesktopEpisodeListeners(container, seasonData, overlayController) {
   container.querySelectorAll(".season-tab-desktop").forEach((tab) => {
     tab.addEventListener("click", () => {
       container
@@ -7456,15 +7722,15 @@ function attachDesktopEpisodeListeners(container, seasonData) {
         episodesCount.textContent = `Episodios (${count})`;
         episodesList.innerHTML = renderEpisodesDesktop(episodes);
 
-        attachDesktopEpisodeItemListeners(container);
+        attachDesktopEpisodeItemListeners(container, overlayController);
       }
     });
   });
 
-  attachDesktopEpisodeItemListeners(container);
+  attachDesktopEpisodeItemListeners(container, overlayController);
 }
 
-function attachDesktopEpisodeItemListeners(container) {
+function attachDesktopEpisodeItemListeners(container, overlayController) {
   container.querySelectorAll(".episode-item-desktop").forEach((item) => {
     item.addEventListener("click", () => {
       container
@@ -7472,7 +7738,14 @@ function attachDesktopEpisodeItemListeners(container) {
         .forEach((i) => i.classList.remove("active"));
       item.classList.add("active");
       if (item.dataset.url) {
-        playInIframe(item.dataset.url);
+        const activeDesktopTab = container.querySelector(".season-tab-desktop.active");
+        const seasonNum = activeDesktopTab ? parseInt(activeDesktopTab.dataset.season, 10) : 1;
+        const episodeNum = parseInt(item.dataset.episode, 10);
+        if (overlayController) {
+          overlayController.selectEpisode(seasonNum, episodeNum, item.dataset.url);
+        } else {
+          playInIframe(item.dataset.url);
+        }
       }
     });
   });
